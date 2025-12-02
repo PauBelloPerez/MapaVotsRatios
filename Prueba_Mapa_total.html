@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PSC – Dif. promedio vs municipales (vots)</title>
+  <link rel="stylesheet" href="styles3.css">
+  <script src="https://api.mapbox.com/mapbox-gl-js/v2.10.0/mapbox-gl.js"></script>
+  <link href="https://api.mapbox.com/mapbox-gl-js/v2.10.0/mapbox-gl.css" rel="stylesheet" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.3.0/papaparse.min.js"></script>
+  <style>
+    body { margin: 0; padding: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; }
+    #map { position: absolute; top: 0; bottom: 0; width: 100%; }
+
+    /* Popup lateral reutilizable */
+    #popup-container {
+      position: fixed; bottom: 10px; left: 10px; background: white; padding: 10px; border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,.3); z-index: 2; width: 320px; display: none;
+    }
+    .popup-header { background: #7b7b7b; color: #fff; padding: 6px 10px; border-radius: 6px; margin-bottom: 8px; }
+    #popup-title { margin: 0; font-size: 16px; }
+    .popup-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 6px 8px; border: 1px solid #eee; border-radius: 6px; background: #fafafa; }
+
+    /* Leyenda */
+    #legend {
+      background: white; border-radius: 8px; bottom: 10px; right: 10px; padding: 10px; position: fixed; z-index: 2; width: 240px;
+      box-shadow: 0 2px 10px rgba(0,0,0,.3); text-align: center; color: #222;
+    }
+    #legend h3 { margin: 0; font-size: 16px; }
+    #legend p { margin: 4px 0 8px 0; font-size: 12px; color: #333; }
+    .legend-separator { height: 1px; background: #000; opacity: .12; margin: 6px 0; }
+    .legend-gradient { height: 16px; width: 100%; border-radius: 6px; margin-top: 6px;
+      background: linear-gradient(to right, #FEEBE7, #F54927, #180501);
+      border: 1px solid #ddd;
+    }
+    .legend-labels { display: flex; justify-content: space-between; font-size: 12px; margin-top: 4px; }
+    .opacity { margin-top: 8px; font-size: 12px; display: flex; align-items: center; gap: 8px; }
+    .opacity input[type="range"] { width: 140px; }
+
+    /* Hover popup */
+    #hover-popup {
+      position: absolute; padding: 6px 8px; background: rgba(0,0,0,.75); color: #fff; border-radius: 6px; font-size: 12px; pointer-events: none; z-index: 3; display: none;
+      box-shadow: 0 2px 6px rgba(0,0,0,.25);
+    }
+    #hover-popup .row { display: flex; justify-content: space-between; gap: 10px; }
+    #hover-popup .row + .row { margin-top: 4px; }
+
+    /* Back */
+    #backButton { 
+      position: absolute; top: 12px; left: 12px; z-index: 4; 
+      background: #B5B5B5; color: #000; padding: 8px 12px; 
+      border-radius: 6px; text-decoRatio_invn: none; 
+      box-shadow: 0 2px 8px rgba(0,0,0,.2); 
+    }
+
+    /* Botón arriba a la derecha */
+    #rightButton {
+      position: absolute; top: 12px; right: 12px; z-index: 4;
+      background: #B5B5B5; color: #000; padding: 8px 12px; 
+      border-radius: 6px; text-decoRatio_invn: none; 
+      box-shadow: 0 2px 8px rgba(0,0,0,.2); 
+    }
+    #rightButton:hover {
+      background: #A9A9A9;
+    }
+  </style>
+</head>
+<body>
+  <!-- Botón para volver al índice -->
+
+  <!-- Botón arriba a la derecha para ir a EvolPSC.html -->
+
+  <div id="map"></div>
+
+  <div id="popup-container">
+    <div class="popup-header"><h3 id="popup-title"></h3></div>
+    <div id="popup-content"></div>
+  </div>
+
+  <div id="legend">
+    <h3>PSC – Dif. promedio vs municipales</h3>
+    <p>(votos por sección censal)</p>
+    <div class="legend-separator"></div>
+    <div class="legend-gradient"></div>
+    <div class="legend-labels">
+      <span id="legend-min">-</span>
+      <span id="legend-mid">0.0</span>
+      <span id="legend-max">-</span>
+    </div>
+    <div class="opacity">
+      <label for="opacity-slider">Opacidad</label>
+      <input type="range" id="opacity-slider" min="0" max="1" step="0.05" value="0.8">
+    </div>
+  </div>
+
+  <div id="hover-popup"></div>
+
+<script>
+  mapboxgl.accessToken = 'pk.eyJ1IjoicGF1YmVsbG9wZXJleiIsImEiOiJjbHdtNjhmcXMwY2d6MmlyejNycXRwZzVsIn0.2Wly8_VtO0BfDMgmfYfxNw';
+
+  const map = new mapboxgl.Map({
+    container: 'map',
+    style: 'mapbox://styles/mapbox/streets-v11',
+    center: [2.0, 41.5632],
+    zoom: 12
+  });
+
+  // --- Helpers ---
+  const normKey = (x) => {
+    if (x === null || x === undefined) return '';
+    const s = String(x).trim();
+    const digits = s.match(/\d+/g);
+    if (!digits) return s.replace(/^\uFEFF/, '').trim();
+    const n = parseInt(digits.join(''), 10);
+    return String(n);
+  };
+
+  // Para porcentajes
+  const parsePP = (v) => {
+    if (v === null || v === undefined) return NaN;
+    if (typeof v === 'number') return v;
+    let s = String(v)
+      .replace(/^\uFEFF/, '')
+      .replace(/\u00A0/g, ' ')
+      .replace(/[−–—]/g, '-')
+      .replace(/pp|%/ig, '')
+      .trim();
+    if (/,/.test(s)) s = s.replace(/\.(?=\d{3}(\D|$))/g, '');
+    s = s.replace(/,/g, '.');
+    s = s.replace(/\s/g, '');
+    const n = parseFloat(s);
+    return isNaN(n) ? NaN : n;
+  };
+
+  // Para votos
+  const parseNum = (v) => {
+    if (v === null || v === undefined) return NaN;
+    if (typeof v === 'number') return v;
+    let s = String(v)
+      .replace(/^\uFEFF/, '')
+      .replace(/\u00A0/g, ' ')
+      .trim();
+    s = s.replace(/\.(?=\d{3}(\D|$))/g, ''); // quitar puntos de miles
+    s = s.replace(/,/g, '.');                // por si acaso
+    s = s.replace(/\s/g, '');
+    const n = parseFloat(s);
+    return isNaN(n) ? NaN : n;
+  };
+
+  const fmt = (x, dec = 2) => (isNaN(x) ? '—' : x.toFixed(dec));
+
+  function loadCSV(path) {
+    return new Promise((resolve) => {
+      Papa.parse(path, {
+        download: true,
+        header: true,
+        skipEmptyLines: true,
+        dynamicTyping: false,
+        transformHeader: (h) => String(h)
+          .replace(/^\uFEFF/, '')
+          .replace(/^"+|"+$/g, '')
+          .replace(/\u00A0/g, ' ')
+          .trim(),
+        complete: (res) => resolve(res.data)
+      });
+    });
+  }
+
+  // Controles (partido + métrica + referencia ratio)
+  function createControls() {
+    const controls = document.createElement('div');
+    controls.id = 'controls-panel';
+    controls.style.position = 'absolute';
+    controls.style.top = '12px';
+    controls.style.left = '50%';
+    controls.style.transform = 'translateX(-50%)';
+    controls.style.zIndex = '5';
+    controls.style.background = 'white';
+    controls.style.padding = '8px 12px';
+    controls.style.borderRadius = '8px';
+    controls.style.boxShadow = '0 2px 8px rgba(0,0,0,.25)';
+    controls.style.display = 'flex';
+    controls.style.gap = '8px';
+    controls.style.alignItems = 'center';
+    controls.style.fontSize = '13px';
+    controls.style.flexWrap = 'wrap';
+
+    controls.innerHTML = `
+      <label>Partit:
+        <select id="party-select"></select>
+      </label>
+      <label>Mètrica:
+        <select id="metric-select">
+          <option value="votes">Vots</option>
+          <option value="percent">% Vots</option>
+          <option value="ratio">Ratio</option>
+        </select>
+      </label>
+      <label>Ref. ratio:
+        <select id="ratio-ref-mode">
+          <option value="self">Propi partit</option>
+          <option value="other">Altre partit</option>
+        </select>
+      </label>
+      <label id="ratio-ref-party-label">Partit ref.:
+        <select id="ratio-ref-party"></select>
+      </label>
+    `;
+
+    document.body.appendChild(controls);
+  }
+
+  let geojsonData;
+  let rowByKey = new Map();
+  let parties = [];
+  let selectedParty = null;
+  let selectedMetric = 'votes';     // votes | percent | ratio
+  let selectedRefMode = 'self';     // self | other
+  let selectedRefParty = null;      // nombre del partido de referencia (si other)
+
+  map.on('load', async () => {
+    createControls();
+
+    const geoUrl = 'https://api.mapbox.com/datasets/v1/paubelloperez/cm0dx5dne4o5o1vnrtf01d057/features?access_token=' + mapboxgl.accessToken;
+
+    const [geojson, rowsRaw] = await Promise.all([
+      fetch(geoUrl).then(r => r.json()),
+      loadCSV('Municipales23Renta.csv')
+    ]);
+
+    // Limpieza mínima del CSV
+    const rows = rowsRaw
+      .filter(r => r && Object.keys(r).length > 0)
+      .map(obj => {
+        const out = {};
+        for (const k in obj) {
+          const ck = k.replace(/^\uFEFF/, '').trim();
+          out[ck] = obj[k];
+        }
+        return out;
+      });
+
+    geojsonData = geojson;
+
+    // Mapear clave districte-secció → fila CSV
+    rowByKey = new Map();
+    rows.forEach(r => {
+      const key = `${normKey(r.Districte)}-${normKey(r.Secció)}`;
+      rowByKey.set(key, r);
+    });
+
+    // Detectar partidos: columnas que empiezan por "Vots "
+    const headers = rows.length ? Object.keys(rows[0]) : [];
+    parties = [];
+    headers.forEach(h => {
+      const m = /^Vots (.+)$/.exec(h);
+      if (m) {
+        const name = m[1];
+        const votesCol = h;
+        const percCol = `% ${name}`;
+        parties.push({
+          name,
+          votesCol,
+          percCol: headers.includes(percCol) ? percCol : null
+        });
+      }
+    });
+
+    // Rellenar desplegables de partidos
+    const partySelect = document.getElementById('party-select');
+    const ratioRefPartySelect = document.getElementById('ratio-ref-party');
+
+    parties.forEach(p => {
+      const opt1 = document.createElement('option');
+      opt1.value = p.name;
+      opt1.textContent = p.name;
+      partySelect.appendChild(opt1);
+
+      const opt2 = document.createElement('option');
+      opt2.value = p.name;
+      opt2.textContent = p.name;
+      ratioRefPartySelect.appendChild(opt2);
+    });
+
+    selectedParty = parties.length ? parties[0].name : null;
+    selectedRefParty = parties.length > 1 ? parties[1].name : (parties[0] ? parties[0].name : null);
+
+    // Dejar seleccionado el refParty inicial
+    if (selectedRefParty) ratioRefPartySelect.value = selectedRefParty;
+
+    const metricSelect = document.getElementById('metric-select');
+    const ratioRefModeSelect = document.getElementById('ratio-ref-mode');
+    const ratioRefPartyLabel = document.getElementById('ratio-ref-party-label');
+
+    // Mostrar/ocultar el selector de partido de referencia según modo
+    function updateRefPartyVisibility() {
+      if (selectedRefMode === 'self') {
+        ratioRefPartyLabel.style.opacity = '0.4';
+      } else {
+        ratioRefPartyLabel.style.opacity = '1';
+      }
+    }
+    updateRefPartyVisibility();
+
+    partySelect.addEventListener('change', (e) => {
+      selectedParty = e.target.value;
+      // Si el partido de referencia es el mismo y el modo es "other", podríamos dejarlo,
+      // pero es más lógico que dejes al usuario cambiarlo si quiere.
+      updateMapDataAndStyle();
+    });
+
+    metricSelect.addEventListener('change', (e) => {
+      selectedMetric = e.target.value;
+      updateMapDataAndStyle();
+    });
+
+    ratioRefModeSelect.addEventListener('change', (e) => {
+      selectedRefMode = e.target.value;
+      updateRefPartyVisibility();
+      updateMapDataAndStyle();
+    });
+
+    ratioRefPartySelect.addEventListener('change', (e) => {
+      selectedRefParty = e.target.value;
+      updateMapDataAndStyle();
+    });
+
+    // Crear fuente y capas
+    map.addSource('secciones-censales', { type: 'geojson', data: geojsonData });
+
+    map.addLayer({
+      id: 'secciones-censales-layer',
+      type: 'fill',
+      source: 'secciones-censales',
+      paint: {
+        'fill-color': '#cccccc',
+        'fill-opacity': 0.8
+      }
+    });
+
+    map.addLayer({
+      id: 'secciones-censales-lines',
+      type: 'line',
+      source: 'secciones-censales',
+      paint: { 'line-color': '#000', 'line-width': 0.5 }
+    });
+
+    // Slider opacidad
+    const opacitySlider = document.getElementById('opacity-slider');
+    if (opacitySlider) {
+      opacitySlider.addEventListener('input', (e) => {
+        const v = parseFloat(e.target.value);
+        if (map.getLayer('secciones-censales-layer')) {
+          map.setPaintProperty('secciones-censales-layer', 'fill-opacity', v);
+        }
+      });
+    }
+
+    // Primera actualización del mapa
+    updateMapDataAndStyle();
+
+    // Hover popup
+    const hover = document.getElementById('hover-popup');
+    map.on('mousemove', 'secciones-censales-layer', (e) => {
+      const f = e.features && e.features[0];
+      if (!f) return;
+
+      const d = f.properties.Districte;
+      const s = f.properties.Secció;
+      const val = f.properties.Value;
+
+      const key = `${normKey(d)}-${normKey(s)}`;
+      const row = rowByKey.get(key);
+
+      let votesVal = null;
+      let percVal = null;
+
+      if (row && selectedParty) {
+        const party = parties.find(p => p.name === selectedParty);
+        if (party) {
+          votesVal = parseNum(row[party.votesCol]);
+          if (party.percCol) percVal = parsePP(row[party.percCol]);
+        }
+      }
+
+      let metricLabel;
+      if (selectedMetric === 'votes') {
+        metricLabel = 'Vots';
+      } else if (selectedMetric === 'percent') {
+        metricLabel = '% Vots';
+      } else {
+        metricLabel = 'Ratio';
+      }
+
+      hover.innerHTML = `
+        <div class="row"><strong>D:</strong><span>${d ?? '—'}</span></div>
+        <div class="row"><strong>SC:</strong><span>${s ?? '—'}</span></div>
+        <div class="row"><strong>Partit:</strong><span>${selectedParty ?? '—'}</span></div>
+        <div class="row"><strong>${metricLabel}:</strong><span>${fmt(val)}</span></div>
+        <div class="row"><strong>Vots ${selectedParty}:</strong><span>${votesVal != null && !isNaN(votesVal) ? votesVal : '—'}</span></div>
+        <div class="row"><strong>% ${selectedParty}:</strong><span>${percVal != null && !isNaN(percVal) ? fmt(percVal) + '%' : '—'}</span></div>
+      `;
+
+      hover.style.left = (e.originalEvent.pageX + 10) + 'px';
+      hover.style.top  = (e.originalEvent.pageY - 28) + 'px';
+      hover.style.display = 'block';
+      map.getCanvas().style.cursor = 'pointer';
+    });
+
+    map.on('mouseleave', 'secciones-censales-layer', () => {
+      if (hover) hover.style.display = 'none';
+      map.getCanvas().style.cursor = '';
+    });
+
+    // Popup lateral en clic
+    map.on('click', 'secciones-censales-layer', (e) => {
+      const f = e.features && e.features[0];
+      if (!f) return;
+
+      const d = f.properties.Districte;
+      const s = f.properties.Secció;
+      const val = f.properties.Value;
+
+      const key = `${normKey(d)}-${normKey(s)}`;
+      const row = rowByKey.get(key);
+
+      let votesVal = null;
+      let percVal = null;
+
+      if (row && selectedParty) {
+        const party = parties.find(p => p.name === selectedParty);
+        if (party) {
+          votesVal = parseNum(row[party.votesCol]);
+          if (party.percCol) percVal = parsePP(row[party.percCol]);
+        }
+      }
+
+      let metricLabel;
+      if (selectedMetric === 'votes') {
+        metricLabel = 'Vots';
+      } else if (selectedMetric === 'percent') {
+        metricLabel = '% Vots';
+      } else if (selectedMetric === 'ratio' && selectedRefMode === 'self') {
+        metricLabel = 'Ratio (vots / mitjana propi partit)';
+      } else {
+        metricLabel = `Ratio (vots ${selectedParty} / vots ${selectedRefParty})`;
+      }
+
+      const popupTitle = document.getElementById('popup-title');
+      const popupContent = document.getElementById('popup-content');
+      const popupContainer = document.getElementById('popup-container');
+
+      if (popupTitle && popupContent && popupContainer) {
+        popupTitle.textContent = `Districte ${d} – Secció ${s}`;
+        popupContent.innerHTML = `
+          <div class="popup-row"><span>Partit:</span><strong>${selectedParty ?? '—'}</strong></div>
+          <div class="popup-row"><span>${metricLabel}:</span><strong>${fmt(val)}</strong></div>
+          <div class="popup-row"><span>Vots ${selectedParty}:</span><strong>${votesVal != null && !isNaN(votesVal) ? votesVal : '—'}</strong></div>
+          <div class="popup-row"><span>% ${selectedParty}:</span><strong>${percVal != null && !isNaN(percVal) ? fmt(percVal) + '%' : '—'}</strong></div>
+        `;
+        popupContainer.style.display = 'block';
+      }
+    });
+
+    // Clic fuera para cerrar popup lateral
+    map.on('click', (e) => {
+      const feats = map.queryRenderedFeatures(e.point, { layers: ['secciones-censales-layer'] });
+      if (!feats.length) {
+        const popupContainer = document.getElementById('popup-container');
+        if (popupContainer) popupContainer.style.display = 'none';
+      }
+    });
+  });
+
+  // Actualiza Value, colores, leyenda y títulos según partido + métrica + referencia
+  function updateMapDataAndStyle() {
+    if (!geojsonData || !selectedParty || !parties.length) return;
+
+    const party = parties.find(p => p.name === selectedParty);
+    if (!party) return;
+
+    const refParty = parties.find(p => p.name === selectedRefParty);
+
+    // 1ª pasada: calcular base (vots o %) y, si hace falta, votos de referencia
+    const baseValues = [];
+    const refValues = [];
+
+    geojsonData.features.forEach(f => {
+      const d = f.properties.Districte;
+      const s = f.properties.Secció;
+      const key = `${normKey(d)}-${normKey(s)}`;
+      const row = rowByKey.get(key);
+
+      let baseVal = NaN;
+      let refVal = NaN;
+
+      if (row) {
+        if (selectedMetric === 'votes' || selectedMetric === 'ratio') {
+          baseVal = parseNum(row[party.votesCol]);
+        } else if (selectedMetric === 'percent') {
+          if (party.percCol) {
+            baseVal = parsePP(row[party.percCol]);
+          }
+        }
+
+        if (selectedMetric === 'ratio' && selectedRefMode === 'other' && refParty) {
+          refVal = parseNum(row[refParty.votesCol]);
+        }
+      }
+
+      f.properties._baseVal = baseVal;
+      f.properties._refVal = refVal;
+
+      if (typeof baseVal === 'number' && !isNaN(baseVal)) {
+        baseValues.push(baseVal);
+      }
+      if (selectedMetric === 'ratio' && selectedRefMode === 'other' &&
+          typeof refVal === 'number' && !isNaN(refVal)) {
+        refValues.push(refVal);
+      }
+    });
+
+    // Si métrica es ratio + propio partido: dividir por la media de votos de ese partido
+    let meanBase = 1;
+    if (selectedMetric === 'ratio' && selectedRefMode === 'self') {
+      if (baseValues.length) {
+        const sum = baseValues.reduce((a, b) => a + b, 0);
+        meanBase = sum / baseValues.length;
+      }
+    }
+
+    const finalValues = [];
+
+    geojsonData.features.forEach(f => {
+      let val = f.properties._baseVal;
+
+      if (selectedMetric === 'ratio') {
+        if (selectedRefMode === 'self') {
+          val = (typeof val === 'number' && !isNaN(val) && meanBase !== 0)
+            ? (val / meanBase)
+            : NaN;
+        } else if (selectedRefMode === 'other') {
+          const refVal = f.properties._refVal;
+          val = (typeof val === 'number' && !isNaN(val) &&
+                 typeof refVal === 'number' && !isNaN(refVal) && refVal !== 0)
+            ? (val / refVal)
+            : NaN;
+        }
+      }
+
+      f.properties.Value = val;
+      if (typeof val === 'number' && !isNaN(val)) {
+        finalValues.push(val);
+      }
+    });
+
+    // Dominio de colores
+    let minVal = 0, maxVal = 1, midVal = 0.5;
+    if (finalValues.length) {
+      minVal = Math.min(...finalValues);
+      maxVal = Math.max(...finalValues);
+      midVal = (minVal + maxVal) / 2;
+    }
+
+    // Actualizar fuente
+    if (map.getSource('secciones-censales')) {
+      map.getSource('secciones-censales').setData(geojsonData);
+    }
+
+    // Actualizar colores
+    if (map.getLayer('secciones-censales-layer')) {
+      map.setPaintProperty(
+        'secciones-censales-layer',
+        'fill-color',
+        [
+          'interpolate',
+          ['linear'],
+          ['to-number', ['get', 'Value']],
+          minVal, '#FEEBE7',
+          midVal, '#F54927',
+          maxVal, '#180501'
+        ]
+      );
+    }
+
+    // Leyenda y título
+    const legendMin = document.getElementById('legend-min');
+    const legendMid = document.getElementById('legend-mid');
+    const legendMax = document.getElementById('legend-max');
+    const legendTitle = document.querySelector('#legend h3');
+    const legendSubtitle = document.querySelector('#legend p');
+
+    if (legendMin && legendMid && legendMax) {
+      const dec = selectedMetric === 'percent' ? 1 : 2;
+      legendMin.textContent = finalValues.length ? minVal.toFixed(dec) : '-';
+      legendMid.textContent = finalValues.length ? midVal.toFixed(dec) : '-';
+      legendMax.textContent = finalValues.length ? maxVal.toFixed(dec) : '-';
+    }
+
+    if (legendTitle && legendSubtitle) {
+      if (selectedMetric === 'votes') {
+        legendTitle.textContent = `${selectedParty} – Vots`;
+        legendSubtitle.textContent = '(vots per secció censal)';
+      } else if (selectedMetric === 'percent') {
+        legendTitle.textContent = `${selectedParty} – % vot`;
+        legendSubtitle.textContent = '(% vot per secció censal)';
+      } else {
+        if (selectedRefMode === 'self') {
+          legendTitle.textContent = `${selectedParty} – Ratio vs mitjana pròpia`;
+          legendSubtitle.textContent = '(vots secció / mitjana vots del partit)';
+        } else {
+          legendTitle.textContent = `${selectedParty} – Ratio vs ${selectedRefParty}`;
+          legendSubtitle.textContent = `(vots ${selectedParty} / vots ${selectedRefParty} per secció)`;
+        }
+      }
+    }
+  }
+</script>
+
+
+</body>
+</html>
